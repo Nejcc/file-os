@@ -4,6 +4,8 @@ package-lock.json
 
 # TypeScript
 dist/
+build/
+src/build/
 *.tsbuildinfo
 
 # IDE
@@ -18,4 +20,8 @@ Thumbs.db
 *.log
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log* 
+yarn-error.log*
+
+# Configuration
+install.json
+src/install.json 
