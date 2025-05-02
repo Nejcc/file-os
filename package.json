@@ -1,0 +1,21 @@
+{
+  "name": "fileos",
+  "version": "0.1.0",
+  "description": "A file/folder based operating system",
+  "main": "src/kernel.ts",
+  "scripts": {
+    "start": "ts-node src/kernel.ts",
+    "build": "tsc",
+    "dev": "ts-node-dev --respawn src/kernel.ts"
+  },
+  "dependencies": {
+    "commander": "^11.1.0",
+    "chalk": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.19",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.3"
+  }
+} 
