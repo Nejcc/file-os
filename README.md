@@ -4,23 +4,42 @@
 [![Node.js](https://img.shields.io/badge/Node.js-20.x-green.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-FileOS is a unique, file/folder-based operating system that operates within your current directory structure. It provides an interactive shell environment with a modern command-line interface for managing and navigating your file system.
+FileOS is a unique, file/folder-based operating system that operates within your current directory structure. It provides an interactive shell environment with a modern command-line interface, user management, and configuration system.
 
 ## ✨ Features
 
 ### Core Features
-- 🔒 Sandboxed environment (restricted to `src` directory)
-- 🖥️ Interactive shell with custom prompt
-- 🎨 Color-coded output for better visibility
-- 📁 Detailed file and directory information
+- 🔒 Secure user authentication and session management
+- 🖥️ Interactive shell with modern features
+- 🎨 Customizable terminal with syntax highlighting
+- 📁 Detailed file and directory management
+- ⚙️ YAML-based configuration system
+- 🔐 User and group permissions
+- 📝 Command history with search
+- 🔄 Tab completion for commands and paths
+
+### Terminal Features
+- Syntax highlighting for commands
+- Auto-suggestions based on history
+- Tab completion for files and directories
+- Command validation
+- Smart directory navigation
+- Configurable prompt and colors
+- History search and navigation
 
 ### Commands
-- `ls` - List directory contents
-- `ll` - List detailed directory contents with size and timestamps
+- `ls`, `ll` - List directory contents (simple and detailed)
 - `cd <path>` - Navigate between directories
 - `pwd` - Show current working directory
-- `exit` - Exit FileOS
+- `mkdir`, `rm` - Directory operations
+- `touch`, `cat`, `echo` - File operations
+- `nano` - Simple file editor
+- `whoami`, `groups` - User information
+- `where` - File search
+- `terminal config` - View/edit terminal settings
+- `history` - Command history
 - `help` - Display available commands
+- `exit` - Exit FileOS
 
 ## 🚀 Getting Started
 
@@ -41,38 +60,60 @@ cd fileos
 npm install
 ```
 
-3. Start FileOS:
+3. Create installation configuration:
+```bash
+cp src/example.install.json src/install.json
+# Edit src/install.json with your preferred settings
+```
+
+4. Run the installation:
+```bash
+npm run install-os
+```
+
+5. Start FileOS:
 ```bash
 npm start
 ```
 
 ## 💻 Usage Examples
 
-### Basic Navigation
+### Authentication
 ```bash
-fos> pwd
-/home/user/projects/fileos/src
+FileOS v1.0.0
+Username: admin
+Password: ****
 
-fos> ls
-commands/
-core/
-kernel.ts
-utils/
-
-fos> ll
-DIR  commands/     --         2024-02-20 15:30:45
-DIR  core/        --         2024-02-20 15:30:45
-FILE kernel.ts    2.5 KB     2024-02-20 15:30:45
-DIR  utils/       --         2024-02-20 15:30:45
+Welcome to FileOS!
+Type "help" for available commands.
 ```
 
-### Directory Navigation
+### File Operations
 ```bash
-fos> cd core
-Changed directory to: /home/user/projects/fileos/src/core
+admin@fileos /home/admin> ls
+documents/
+downloads/
+.history
+.terminal
 
-fos> cd ..
-Changed directory to: /home/user/projects/fileos/src
+admin@fileos /home/admin> mkdir projects
+Created directory: projects
+
+admin@fileos /home/admin> cd projects
+Changed directory to: /home/admin/projects
+```
+
+### Terminal Configuration
+```bash
+admin@fileos /> terminal config
+{
+  "features": {
+    "autocompletion": true,
+    "syntax_highlighting": true,
+    "command_validation": true,
+    // ... more settings
+  }
+}
 ```
 
 ## 🛠️ Development
@@ -81,24 +122,32 @@ Changed directory to: /home/user/projects/fileos/src
 ```
 fileos/
 ├── src/
-│   ├── commands/    # Command implementations
-│   ├── core/        # Core system components
-│   ├── utils/       # Utility functions
-│   └── kernel.ts    # Main system kernel
-├── package.json     # Project dependencies
-├── tsconfig.json    # TypeScript configuration
-└── README.md       # Project documentation
+│   ├── core/           # Core system components
+│   │   └── installer.ts  # Installation system
+│   ├── build/          # Runtime file system
+│   │   ├── bin/         # System binaries
+│   │   ├── etc/         # Configuration files
+│   │   │   ├── system/    # System config
+│   │   │   ├── security/  # Security settings
+│   │   │   ├── network/   # Network config
+│   │   │   └── users/     # User management
+│   │   ├── home/        # User home directories
+│   │   └── var/         # Variable data
+│   ├── runtime-kernel.ts  # Runtime system kernel
+│   ├── install-kernel.ts  # Installation system
+│   └── example.install.json  # Installation template
+├── package.json
+├── tsconfig.json
+└── README.md
 ```
 
-### Running in Development Mode
-```bash
-npm run dev
-```
-
-### Building the Project
-```bash
-npm run build
-```
+### Configuration Files
+- `system.yml` - System version, hostname, timezone
+- `security.yml` - Login attempts, password rules
+- `network.yml` - Network settings
+- `users.yml` - User accounts and permissions
+- `.terminal` - Per-user terminal settings
+- `.history` - Command history
 
 ## 🤝 Contributing
 
@@ -124,8 +173,9 @@ We follow the [Conventional Commits](https://www.conventionalcommits.org/) speci
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-
 ## 🙏 Acknowledgments
 
 - [Commander.js](https://github.com/tj/commander.js/) for command-line interface
-- [Chalk](https://github.com/chalk/chalk) for terminal styling 
+- [Chalk](https://github.com/chalk/chalk) for terminal styling
+- [Inquirer](https://github.com/SBoudrias/Inquirer.js) for interactive prompts
+- [js-yaml](https://github.com/nodeca/js-yaml) for YAML configuration 
