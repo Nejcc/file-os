@@ -1,0 +1,2 @@
+This is a test file for the update system.
+It will be copied to the build directory during the update process. 

@@ -65,7 +65,47 @@ export class FileOSInstaller {
         try {
             const configPath = join(process.cwd(), 'src', 'install.json');
             const data = await readFile(configPath, 'utf-8');
-            const config = JSON.parse(data) as InstallConfig;
+            const jsonConfig = JSON.parse(data);
+
+            // Convert the JSON format to our InstallConfig format
+            const config: InstallConfig = {
+                system: {
+                    hostname: jsonConfig.system.hostname,
+                    timezone: jsonConfig.system.timezone,
+                    locale: jsonConfig.system.locale,
+                    keyboard: jsonConfig.system.keyboard,
+                    console: jsonConfig.system.console
+                },
+                user: {
+                    username: jsonConfig.user.username,
+                    password: jsonConfig.user.password,
+                    rootPassword: jsonConfig.user.rootPassword,
+                    shell: jsonConfig.user.shell,
+                    groups: jsonConfig.user.groups
+                },
+                network: {
+                    domain: jsonConfig.network.domain,
+                    dns: jsonConfig.network.dns,
+                    interfaces: [{
+                        name: 'eth0',
+                        type: jsonConfig.network.interfaces.eth0.type,
+                        address: jsonConfig.network.interfaces.eth0.address,
+                        netmask: jsonConfig.network.interfaces.eth0.netmask,
+                        gateway: ''
+                    }]
+                },
+                security: {
+                    maxLoginAttempts: jsonConfig.security.maxLoginAttempts,
+                    sessionTimeout: jsonConfig.security.sessionTimeout,
+                    passwordMinLength: jsonConfig.security.passwordMinLength,
+                    allowedUsernameChars: jsonConfig.security.allowedUsernameChars
+                },
+                sysconfig: {
+                    kernelVersion: jsonConfig.sysconfig.kernel.version,
+                    kernelType: jsonConfig.sysconfig.kernel.type,
+                    architecture: jsonConfig.sysconfig.kernel.architecture
+                }
+            };
 
             // Validate required fields
             if (!config.system?.hostname || !config.user?.username || 
@@ -222,7 +262,11 @@ export class FileOSInstaller {
             'var/log',
             'var/run',
             'var/lib',
-            'tmp'
+            'var/backup',
+            'tmp',
+            'kernel',
+            'kernel/commands',
+            'kernel/core'
         ];
 
         try {
@@ -232,8 +276,63 @@ export class FileOSInstaller {
                 )
             );
 
+            // Copy all source files to kernel directory
+            const filesToCopy = [
+                { source: join('src', 'runtime-kernel.ts'), dest: join('kernel', 'kernel.ts') },
+                { source: join('src', 'commands', 'sys.ts'), dest: join('kernel', 'commands', 'sys.ts') },
+                { source: join('src', 'core', 'updater.ts'), dest: join('kernel', 'core', 'updater.ts') },
+                { source: join('src', 'core', 'installer.ts'), dest: join('kernel', 'core', 'installer.ts') },
+                { source: join('src', 'install-kernel.ts'), dest: join('kernel', 'install-kernel.ts') }
+            ];
+
+            await Promise.all(
+                filesToCopy.map(async file => {
+                    const sourcePath = join(process.cwd(), file.source);
+                    const destPath = join(this.rootPath, file.dest);
+                    try {
+                        let content = await readFile(sourcePath, 'utf-8');
+                        
+                        // Update imports based on file location and type
+                        const isCommand = file.dest.includes('commands/');
+                        const isCore = file.dest.includes('core/');
+                        const isKernel = file.dest === 'kernel/kernel.ts';
+
+                        // Fix relative imports for commands
+                        if (isCommand) {
+                            content = content
+                                .replace(/from ['"]\.\.\/core\//g, 'from \'../core/')
+                                .replace(/from ['"]\.\.\/utils\//g, 'from \'../utils/')
+                                .replace(/from ['"]\.\.\//g, 'from \'../');
+                        }
+                        // Fix relative imports for core modules
+                        else if (isCore) {
+                            content = content
+                                .replace(/from ['"]\.\.\/commands\//g, 'from \'../commands/')
+                                .replace(/from ['"]\.\.\/utils\//g, 'from \'../utils/')
+                                .replace(/from ['"]\.\.\//g, 'from \'../');
+                        }
+                        // Fix relative imports for kernel
+                        else if (isKernel) {
+                            content = content
+                                .replace(/from ['"]\.\/commands\//g, 'from \'./commands/')
+                                .replace(/from ['"]\.\/core\//g, 'from \'./core/')
+                                .replace(/from ['"]\.\/utils\//g, 'from \'./utils/');
+                        }
+
+                        await writeFile(destPath, content);
+                        console.log(chalk.green(`Installed ${file.dest}`));
+                    } catch (error) {
+                        console.error(chalk.yellow(`Warning: Could not copy file ${file.source}`), error);
+                    }
+                })
+            );
+
             // Create .terminal config file for the user
             await this.createTerminalConfig(this.config.user.username);
+
+            // Create empty history file
+            const historyPath = join(this.rootPath, 'home', this.config.user.username, '.history');
+            await writeFile(historyPath, JSON.stringify([]));
 
             console.log(chalk.green('Created directory structure'));
         } catch (error) {
@@ -248,39 +347,50 @@ export class FileOSInstaller {
             }
 
             // Create necessary directories
-            await mkdir(join(this.rootPath, 'etc', 'system'), { recursive: true });
-            await mkdir(join(this.rootPath, 'etc', 'security'), { recursive: true });
-            await mkdir(join(this.rootPath, 'etc', 'network'), { recursive: true });
-            await mkdir(join(this.rootPath, 'etc', 'users'), { recursive: true });
-            await mkdir(join(this.rootPath, 'etc', 'sysconfig'), { recursive: true });
-            await mkdir(join(this.rootPath, 'home', this.config.user.username), { recursive: true });
-            await mkdir(join(this.rootPath, 'var', 'log'), { recursive: true });
+            await this.createDirectoryStructure();
 
             // Save system configuration
             const systemConfig = {
-                version: '1.0.0',
+                version: this.config.sysconfig.kernelVersion,
                 hostname: this.config.system.hostname,
-                installDate: new Date().toISOString(),
-                rootPath: this.rootPath,
+                installation_date: new Date().toISOString(),
                 timezone: this.config.system.timezone,
-                locale: this.config.system.locale
+                locale: this.config.system.locale,
+                keyboard: this.config.system.keyboard,
+                console: this.config.system.console
             };
-
             await writeFile(
                 join(this.rootPath, 'etc', 'system', 'system.yml'),
                 yaml.dump(systemConfig)
             );
 
+            // Save user configuration
+            const userConfig = {
+                users: [{
+                    username: this.config.user.username,
+                    passwordHash: createHash('sha256').update(this.config.user.password).digest('hex'),
+                    rootPasswordHash: createHash('sha1').update(this.config.user.rootPassword).digest('hex'),
+                    homeDir: join(this.rootPath, 'home', this.config.user.username),
+                    created: new Date().toISOString(),
+                    shell: this.config.user.shell,
+                    groups: this.config.user.groups
+                }],
+                currentUser: this.config.user.username
+            };
+            await writeFile(
+                join(this.rootPath, 'etc', 'users', 'users.yml'),
+                yaml.dump(userConfig)
+            );
+
             // Save security configuration
             const securityConfig = {
-                maxLoginAttempts: 3,
-                passwordMinLength: 8,
-                allowedUsernameChars: 'a-zA-Z0-9_-',
-                allowedHostnameChars: 'a-zA-Z0-9-',
-                sessionTimeout: 3600,
+                maxLoginAttempts: this.config.security.maxLoginAttempts,
+                passwordMinLength: this.config.security.passwordMinLength,
+                allowedUsernameChars: this.config.security.allowedUsernameChars,
+                allowedHostnameChars: "a-zA-Z0-9-",
+                sessionTimeout: this.config.security.sessionTimeout,
                 requireStrongPasswords: true
             };
-
             await writeFile(
                 join(this.rootPath, 'etc', 'security', 'security.yml'),
                 yaml.dump(securityConfig)
@@ -289,120 +399,103 @@ export class FileOSInstaller {
             // Save network configuration
             const networkConfig = {
                 hostname: this.config.system.hostname,
-                domain: 'fileos.local',
-                dns: ['8.8.8.8', '8.8.4.4'],
+                domain: this.config.network.domain,
+                dns: this.config.network.dns,
                 interfaces: {
                     eth0: {
-                        type: 'ethernet',
-                        address: '192.168.1.100',
-                        netmask: '255.255.255.0'
+                        type: this.config.network.interfaces[0].type,
+                        address: this.config.network.interfaces[0].address,
+                        netmask: this.config.network.interfaces[0].netmask
                     }
                 }
             };
-
             await writeFile(
                 join(this.rootPath, 'etc', 'network', 'network.yml'),
                 yaml.dump(networkConfig)
             );
 
-            // Save user configuration
-            const userConfig = {
-                users: [{
-                    username: this.config.user.username,
-                    passwordHash: createHash('sha256').update(this.config.user.password).digest('hex'),
-                    rootPasswordHash: createHash('sha256').update(this.config.user.password).digest('hex'),
-                    homeDir: join(this.rootPath, 'home', this.config.user.username),
-                    created: new Date().toISOString(),
-                    shell: '/bin/fos',
-                    groups: ['users', 'admin']
-                }],
-                currentUser: this.config.user.username
-            };
-
-            await writeFile(
-                join(this.rootPath, 'etc', 'users', 'users.yml'),
-                yaml.dump(userConfig)
-            );
-
             // Save sysconfig configuration
             const sysconfigConfig = {
                 kernel: {
-                    version: '1.0.0',
-                    type: 'FileOS',
-                    architecture: 'x64'
+                    version: this.config.sysconfig.kernelVersion,
+                    type: this.config.sysconfig.kernelType,
+                    architecture: this.config.sysconfig.architecture
                 },
                 system: {
                     timezone: this.config.system.timezone,
                     locale: this.config.system.locale,
-                    keyboard: 'us',
-                    console: 'tty0'
+                    keyboard: this.config.system.keyboard,
+                    console: this.config.system.console
                 }
             };
-
             await writeFile(
                 join(this.rootPath, 'etc', 'sysconfig', 'system.yml'),
                 yaml.dump(sysconfigConfig)
             );
 
-            // Create terminal configuration
-            const terminalConfig = {
-                features: {
-                    autocompletion: true,
-                    autosuggestion: true,
-                    syntax_highlighting: true,
-                    command_validation: true,
-                    history_search: true,
-                    smart_quotes: false,
-                    auto_cd: true,
-                    show_hidden_files: false
-                },
-                style: {
-                    prompt_symbol: ">",
-                    directory_color: "blue",
-                    command_color: "green",
-                    error_color: "red",
-                    suggestion_color: "gray"
-                },
-                behavior: {
-                    history_size: 1000,
-                    suggestion_delay_ms: 100,
-                    cache_ttl_ms: 5000,
-                    max_suggestions: 5
-                }
-            };
-
-            // Save terminal configuration
-            await writeFile(
-                join(this.rootPath, 'home', this.config.user.username, '.terminal'),
-                JSON.stringify(terminalConfig, null, 2)
-            );
-
-            // Create history file
-            await writeFile(
-                join(this.rootPath, 'home', this.config.user.username, '.history'),
-                '[]'
-            );
-
+            console.log(chalk.green('Configuration files created successfully'));
         } catch (error) {
             throw new Error(`Failed to save configuration: ${error}`);
         }
     }
 
     private async validateInstallation(): Promise<boolean> {
-        const requiredFiles = [
-            'etc/system/system.yml',
-            'etc/security/security.yml',
-            'etc/network/network.yml',
-            'etc/users/users.yml',
-            'etc/sysconfig/system.yml'
-        ];
-
         try {
-            await Promise.all(requiredFiles.map(file => 
-                stat(join(this.rootPath, file))
-            ));
+            // Check if required directories exist
+            const requiredDirs = [
+                'bin',
+                'etc',
+                'etc/security',
+                'etc/system',
+                'etc/network',
+                'etc/users',
+                'home',
+                'var',
+                'var/log'
+            ];
+
+            for (const dir of requiredDirs) {
+                const dirPath = join(this.rootPath, dir);
+                try {
+                    await stat(dirPath);
+                } catch {
+                    console.error(chalk.red(`Missing required directory: ${dir}`));
+                    return false;
+                }
+            }
+
+            // Check if required configuration files exist
+            const requiredFiles = [
+                'etc/system/system.yml',
+                'etc/security/security.yml',
+                'etc/network/network.yml',
+                'etc/users/users.yml'
+            ];
+
+            for (const file of requiredFiles) {
+                const filePath = join(this.rootPath, file);
+                try {
+                    await stat(filePath);
+                } catch {
+                    console.error(chalk.red(`Missing required file: ${file}`));
+                    return false;
+                }
+            }
+
+            // Check if user home directory exists
+            if (this.config) {
+                const userHomeDir = join(this.rootPath, 'home', this.config.user.username);
+                try {
+                    await stat(userHomeDir);
+                } catch {
+                    console.error(chalk.red(`Missing user home directory: ${userHomeDir}`));
+                    return false;
+                }
+            }
+
             return true;
-        } catch {
+        } catch (error) {
+            console.error(chalk.red('Error validating installation:'), error);
             return false;
         }
     }

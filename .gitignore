@@ -24,4 +24,7 @@ yarn-error.log*
 
 # Configuration
 install.json
-src/install.json 
+src/install.json
+
+# Documentation
+*.mdc 

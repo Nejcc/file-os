@@ -1,0 +1,28 @@
+version: "1.0.1"
+files:
+  - source: "src/core/updater.ts"
+    destination: "src/core/updater.ts"
+    type: "file"
+    hash: "sha256:..."  # Replace with actual hash
+
+  - source: "src/commands/sys.ts"
+    destination: "src/commands/sys.ts"
+    type: "file"
+    hash: "sha256:..."  # Replace with actual hash
+
+  - source: "src/core"
+    destination: "src/core"
+    type: "directory"
+
+dependencies:
+  js-yaml: "^4.1.0"
+  chalk: "^4.1.2"
+
+migrations:
+  - version: "1.0.1"
+    script: |
+      # Migration script for version 1.0.1
+      # This script will be executed during the update
+      # Example: Update configuration format
+      # Example: Migrate user data
+      # Example: Update file permissions 

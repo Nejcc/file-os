@@ -11,13 +11,14 @@ import yaml from 'js-yaml';
 import path from 'path';
 import { createInterface } from 'readline';
 import { unlink } from 'fs/promises';
+import { SystemCommands } from './commands/sys';
 
 const execAsync = promisify(exec);
 
 interface SystemConfig {
     version: string;
     hostname: string;
-    installDate: string;
+    installation_date: string;
     rootPath: string;
     timezone: string;
     locale: string;
@@ -155,19 +156,58 @@ export class RuntimeKernel {
     };
     private lastSuggestion: string = '';
     private suggestionTimeout: NodeJS.Timeout | null = null;
+    private systemCommands: SystemCommands;
+    private skipLogin: boolean = false;
+    private autoLoginUser: string | null = null;
 
-    constructor() {
+    constructor(options: { skipLogin?: boolean; autoLoginUser?: string } = {}) {
         this.rootPath = join(process.cwd(), 'src', 'build');
         this.currentPath = this.rootPath;
         this.program = new Command();
+        this.systemCommands = new SystemCommands(this.rootPath);
+        this.skipLogin = options.skipLogin || false;
+        this.autoLoginUser = options.autoLoginUser || null;
         this.initialize();
     }
 
-    private initialize() {
+    private initialize(): void {
         this.program
             .name('fos')
             .description('FileOS - Runtime Environment')
             .version('1.0.0');
+
+        this.program
+            .command('sys')
+            .description('System management commands')
+            .addCommand(
+                new Command('update')
+                    .description('Update the system')
+                    .option('--revert', 'Revert to previous version')
+                    .action(async (options) => {
+                        await this.systemCommands.update(options.revert ? ['--revert'] : []);
+                    })
+            )
+            .addCommand(
+                new Command('upgrade')
+                    .description('Upgrade the system to a new major version')
+                    .action(async () => {
+                        await this.systemCommands.upgrade([]);
+                    })
+            )
+            .addCommand(
+                new Command('check')
+                    .description('Check system status and available updates')
+                    .action(async () => {
+                        await this.systemCommands.check([]);
+                    })
+            );
+
+        this.program
+            .command('sys check')
+            .description('Check system status and available updates')
+            .action(async (args) => {
+                await this.systemCommands.check(args);
+            });
     }
 
     private getPrompt(): string {
@@ -266,7 +306,7 @@ export class RuntimeKernel {
             console.log(chalk.cyan('======================='));
             console.log(chalk.cyan(`Version: ${system.version}`));
             console.log(chalk.cyan(`Hostname: ${system.hostname}`));
-            console.log(chalk.cyan(`Installation Date: ${new Date(system.installDate).toLocaleString()}`));
+            console.log(chalk.cyan(`Installation Date: ${new Date(system.installation_date).toLocaleString()}`));
             console.log(chalk.cyan(`Timezone: ${system.timezone}`));
             console.log(chalk.cyan(`Locale: ${system.locale}`));
             console.log();
@@ -279,6 +319,41 @@ export class RuntimeKernel {
     }
 
     private async login(): Promise<boolean> {
+        // Skip login if skipLogin is true
+        if (this.skipLogin) {
+            const userConfig = this.configCache.user;
+            if (!userConfig?.users.length) {
+                console.error(chalk.red('Configuration error. Please run the installer first.'));
+                console.log(chalk.cyan('npm run install-os'));
+                return false;
+            }
+
+            // Use autoLoginUser if provided, otherwise use first user
+            const username = this.autoLoginUser || userConfig.users[0].username;
+            const user = userConfig.users.find(u => u.username === username);
+            if (!user) {
+                console.error(chalk.red(`Auto-login user ${username} not found`));
+                return false;
+            }
+
+            userConfig.currentUser = user.username;
+            this.currentPath = user.homeDir;
+            this.currentUser = user.username;
+            this.lastLoginTime = Date.now();
+
+            // Save updated user configuration
+            try {
+                await writeFile(
+                    join(this.rootPath, 'etc', 'users', 'users.yml'),
+                    yaml.dump(userConfig)
+                );
+            } catch (error) {
+                console.error(chalk.yellow('Warning: Could not save user session'));
+            }
+
+            return true;
+        }
+
         const userConfig = this.configCache.user;
         const securityConfig = this.configCache.security;
 
@@ -379,130 +454,134 @@ export class RuntimeKernel {
     }
 
     private async handleCommand(line: string) {
+        if (!line.trim()) return;
+
+        this.addToHistory(line.trim());
         const args = line.trim().split(/\s+/);
-        if (args[0] === '') return;
+        const command = args[0];
+        const subArgs = args.slice(1);
 
-        // Pre-cache the current directory contents for better tab completion
-        this.updateDirectoryCache(this.currentPath).catch(() => {});
+        try {
+            // Handle sys commands first
+            if (command === 'sys') {
+                if (subArgs.length === 0) {
+                    console.log(chalk.red('Error: sys requires a subcommand (update, upgrade, or check)'));
+                    return;
+                }
+                const subCommand = subArgs[0];
+                const subCommandArgs = subArgs.slice(1);
+                switch (subCommand) {
+                    case 'update':
+                        await this.systemCommands.update(subCommandArgs);
+                        return;
+                    case 'upgrade':
+                        await this.systemCommands.upgrade(subCommandArgs);
+                        return;
+                    case 'check':
+                        await this.systemCommands.check(subCommandArgs);
+                        return;
+                    default:
+                        console.log(chalk.red(`Unknown sys subcommand: ${subCommand}`));
+                        console.log('Available subcommands: update, upgrade, check');
+                        return;
+                }
+            }
 
-        this.addToHistory(line);
-
-        // Handle auto_cd feature
-        if (this.terminalConfig.features.auto_cd && !args[0].startsWith('.')) {
-            try {
-                const stats = await stat(join(this.currentPath, args[0]));
-                if (stats.isDirectory()) {
-                    await this.changeDirectory(args[0]);
-                    return;
-                }
-            } catch {}
-        }
-
-        switch (args[0]) {
-            case 'terminal':
-                if (args[1] === 'config') {
-                    await this.showTerminalConfig();
-                } else if (args[1] === 'edit') {
-                    await this.editTerminalConfig();
-                } else {
-                    console.log(chalk.cyan('Usage: terminal [config|edit]'));
-                }
-                break;
-            case 'help':
-                this.showHelp();
-                break;
-            case 'exit':
-                console.log(chalk.yellow('Exiting FileOS...'));
-                this.rl.close();
-                process.exit(0);
-            case 'ls':
-                await this.listDirectory();
-                break;
-            case 'll':
-                await this.listDirectoryDetailed();
-                break;
-            case 'pwd':
-                console.log(chalk.blue(this.getDisplayPath()));
-                break;
-            case 'cd':
-                await this.changeDirectory(args[1] || '~');
-                break;
-            case 'whoami':
-                this.showUserInfo();
-                break;
-            case 'hostname':
-                this.showHostname();
-                break;
-            case 'groups':
-                this.showGroups();
-                break;
-            case 'history':
-                this.showHistory();
-                break;
-            case 'mkdir':
-                if (!args[1]) {
-                    console.error(chalk.red('mkdir: missing directory argument'));
-                    return;
-                }
-                const isRecursive = args[1] === '-p';
-                const dirPath = isRecursive ? args[2] : args[1];
-                if (!dirPath) {
-                    console.error(chalk.red('mkdir: missing directory argument'));
-                    return;
-                }
-                await this.makeDirectory(dirPath);
-                break;
-            case 'rm':
-                if (!args[1]) {
-                    console.error(chalk.red('rm: missing directory argument'));
-                    return;
-                }
-                const isRecursiveRm = args[1] === '-r';
-                const targetPath = isRecursiveRm ? args[2] : args[1];
-                if (!targetPath) {
-                    console.error(chalk.red('rm: missing directory argument'));
-                    return;
-                }
-                await this.removeDirectory(targetPath, isRecursiveRm);
-                break;
-            case 'where':
-                if (args.length === 1) {
-                    await this.locateFile(args[0]);
-                } else {
-                    console.log('Usage: where <filename>');
-                }
-                break;
-            case 'nano':
-                if (args.length === 1) {
-                    await this.editFile(args[0]);
-                } else {
-                    console.log('Usage: nano <filename>');
-                }
-                break;
-            case 'cat':
-                if (args.length === 2) {
-                    await this.catFile(args[1]);
-                } else {
-                    console.log('Usage: cat <filename>');
-                }
-                break;
-            case 'touch':
-                if (args.length === 2) {
-                    await this.touchFile(args[1]);
-                } else {
-                    console.log('Usage: touch <filename>');
-                }
-                break;
-            case 'echo':
-                if (args.length >= 2) {
-                    await this.echoContent(args.slice(1));
-                } else {
-                    console.log('Usage: echo <content> [> filename]');
-                }
-                break;
-            default:
-                console.error(chalk.red(`Unknown command: ${args[0]}`));
-                console.log(chalk.cyan('Type "help" to see available commands.'));
+            // Handle other commands
+            switch (command) {
+                case 'ls':
+                    await this.listDirectory();
+                    break;
+                case 'll':
+                    await this.listDirectoryDetails();
+                    break;
+                case 'cd':
+                    await this.changeDirectory(subArgs[0] || '');
+                    break;
+                case 'pwd':
+                    await this.printWorkingDirectory();
+                    break;
+                case 'whoami':
+                    await this.showCurrentUser();
+                    break;
+                case 'hostname':
+                    await this.showHostname();
+                    break;
+                case 'groups':
+                    await this.showGroups();
+                    break;
+                case 'help':
+                    this.showHelp();
+                    break;
+                case 'history':
+                    await this.showHistory();
+                    break;
+                case 'mkdir':
+                    if (subArgs.length === 0) {
+                        console.log(chalk.red('Error: mkdir requires a directory name'));
+                        break;
+                    }
+                    await this.makeDirectory(subArgs[0]);
+                    break;
+                case 'rm':
+                    if (subArgs.length === 0) {
+                        console.log(chalk.red('Error: rm requires a path'));
+                        break;
+                    }
+                    await this.removeDirectory(subArgs[0], subArgs.includes('-r'));
+                    break;
+                case 'terminal':
+                    if (subArgs[0] === 'config') {
+                        if (subArgs[1] === 'edit') {
+                            await this.editTerminalConfig();
+                        } else {
+                            await this.showTerminalConfig();
+                        }
+                    } else {
+                        console.log(chalk.red('Error: Unknown terminal command'));
+                    }
+                    break;
+                case 'where':
+                    if (subArgs.length === 0) {
+                        console.log(chalk.red('Error: where requires a filename'));
+                        break;
+                    }
+                    await this.locateFile(subArgs[0]);
+                    break;
+                case 'nano':
+                    if (subArgs.length === 0) {
+                        console.log(chalk.red('Error: nano requires a filename'));
+                        break;
+                    }
+                    await this.editFile(subArgs[0]);
+                    break;
+                case 'cat':
+                    if (subArgs.length === 0) {
+                        console.log(chalk.red('Error: cat requires a filename'));
+                        break;
+                    }
+                    await this.catFile(subArgs[0]);
+                    break;
+                case 'touch':
+                    if (subArgs.length === 0) {
+                        console.log(chalk.red('Error: touch requires a filename'));
+                        break;
+                    }
+                    await this.touchFile(subArgs[0]);
+                    break;
+                case 'echo':
+                    await this.echo(subArgs);
+                    break;
+                case 'exit':
+                    console.log('Exiting FileOS...');
+                    console.log('Goodbye!');
+                    process.exit(0);
+                default:
+                    console.log(chalk.red(`Unknown command: ${command}`));
+                    console.log('Type "help" to see available commands.');
+            }
+        } catch (error) {
+            console.error(chalk.red('Error:'), error);
         }
     }
 
@@ -545,7 +624,7 @@ export class RuntimeKernel {
         }
     }
 
-    private async listDirectoryDetailed(): Promise<void> {
+    private async listDirectoryDetails(): Promise<void> {
         try {
             const items = await readdir(this.currentPath);
             if (items.length === 0) {
@@ -722,7 +801,10 @@ export class RuntimeKernel {
             { cmd: 'echo <text>', desc: 'Print text to console' },
             { cmd: 'echo <text> > <file>', desc: 'Write text to file' },
             { cmd: 'terminal config', desc: 'Show terminal configuration' },
-            { cmd: 'terminal edit', desc: 'Edit terminal configuration' }
+            { cmd: 'terminal edit', desc: 'Edit terminal configuration' },
+            { cmd: 'sys update', desc: 'Update system kernel' },
+            { cmd: 'sys upgrade', desc: 'Upgrade system kernel' },
+            { cmd: 'sys check', desc: 'Check system status' }
         ];
 
         const maxCmdLength = Math.max(...commands.map(c => c.cmd.length));
@@ -745,7 +827,7 @@ export class RuntimeKernel {
         const commands = [
             'ls', 'll', 'cd', 'pwd', 'whoami', 'hostname', 'groups',
             'help', 'exit', 'history', 'mkdir', 'rm', 'where', 'nano',
-            'cat', 'touch', 'echo', 'terminal'
+            'cat', 'touch', 'echo', 'terminal', 'sys'
         ];
 
         // If no space after command, complete the command itself
@@ -796,6 +878,15 @@ export class RuntimeKernel {
                 return [[], lastArg];
             } catch {
                 return [[], lastArg];
+            }
+        }
+
+        // Add system command completions
+        if (args[0] === 'sys') {
+            const sysCommands = ['update', 'upgrade', 'check'];
+            if (args.length === 2) {
+                const hits = sysCommands.filter(cmd => cmd.startsWith(lastArg));
+                return [hits.length ? hits.slice(0, this.terminalConfig.behavior.max_suggestions) : [], lastArg];
             }
         }
 
@@ -1224,35 +1315,30 @@ export class RuntimeKernel {
         }
     }
 
-    private async echoContent(args: string[]): Promise<void> {
+    private async echo(args: string[]): Promise<void> {
+        if (args.length === 0) {
+            console.log();
+            return;
+        }
+
+        const outputIndex = args.indexOf('>');
+        if (outputIndex === -1) {
+            console.log(args.join(' '));
+            return;
+        }
+
+        if (outputIndex === args.length - 1) {
+            console.log(chalk.red('Error: No output file specified'));
+            return;
+        }
+
+        const text = args.slice(0, outputIndex).join(' ');
+        const filePath = join(this.currentPath, args[outputIndex + 1]);
+
         try {
-            if (args.length < 2) {
-                console.log('Usage: echo <content> [> filename]');
-                return;
-            }
-
-            const content = args.slice(1, -2).join(' ');
-            const lastArg = args[args.length - 1];
-            const secondLastArg = args[args.length - 2];
-
-            if (secondLastArg === '>') {
-                // Write to file
-                const filepath = lastArg;
-                const fullPath = path.join(this.currentPath, filepath);
-                
-                if (!await this.isPathInRoot(fullPath)) {
-                    console.log('Error: Cannot write files outside root directory');
-                    return;
-                }
-
-                await writeFile(fullPath, content);
-                console.log(`Content written to: ${filepath}`);
-            } else {
-                // Just print to console
-                console.log(args.slice(1).join(' '));
-            }
+            await writeFile(filePath, text);
         } catch (error) {
-            console.log('Error:', error);
+            console.error(chalk.red('Error writing to file:'), error);
         }
     }
 
@@ -1281,6 +1367,14 @@ export class RuntimeKernel {
         } catch (error) {
             console.error(chalk.yellow('Warning: Could not save command history'), error);
         }
+    }
+
+    private async printWorkingDirectory(): Promise<void> {
+        console.log(this.getDisplayPath());
+    }
+
+    private async showCurrentUser(): Promise<void> {
+        console.log(this.currentUser);
     }
 
     public async start() {
@@ -1345,6 +1439,10 @@ export class RuntimeKernel {
     }
 }
 
-// Start the runtime kernel
-const runtime = new RuntimeKernel();
+// Start the runtime kernel with options
+const options = {
+    skipLogin: process.argv.includes('--skip-login'),
+    autoLoginUser: process.argv.find(arg => arg.startsWith('--auto-login='))?.split('=')[1]
+};
+const runtime = new RuntimeKernel(options);
 runtime.start(); 

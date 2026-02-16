@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "A file/folder-based operating system",
   "main": "src/kernel.ts",
+  "type": "module",
   "scripts": {
-    "install-os": "ts-node src/install-kernel.ts",
-    "start": "ts-node src/runtime-kernel.ts",
+    "install-os": "vite-node src/install-kernel.ts",
+    "start": "vite-node src/build/kernel/kernel.ts",
+    "dev": "vite-node src/build/kernel/kernel.ts --watch",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -14,18 +18,20 @@
     "typescript"
   ],
   "author": "",
-  "license": "MIT",
+  "license": "ISC",
   "dependencies": {
     "@types/js-yaml": "^4.0.9",
     "chalk": "^4.1.2",
-    "commander": "^11.1.0",
-    "inquirer": "^8.2.6",
+    "commander": "^11.0.0",
+    "inquirer": "^8.2.5",
     "js-yaml": "^4.1.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.0.0"
   },
   "devDependencies": {
-    "@types/inquirer": "^8.2.10",
-    "@types/node": "^20.10.5",
-    "ts-node": "^10.9.2"
+    "@types/inquirer": "^8.2.5",
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.1",
+    "vite": "^5.0.0",
+    "vite-node": "^1.0.0"
   }
 }
